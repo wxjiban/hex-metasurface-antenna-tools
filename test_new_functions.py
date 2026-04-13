@@ -2,7 +2,10 @@ import json
 import os
 import shutil
 from agent_tools import (
+    CONSTANTS,
     GenerateGridLayout,
+    ConfigureCPEfficiency,
+    ApplyMeasuredCompensation,
     ApplyCollimateLens,
     ApplyAxiconPhase,
     ApplyAiryPhase,
@@ -15,152 +18,322 @@ from agent_tools import (
     OUTPUT_DIR
 )
 
+# ============================================================
+# 配置: 实测数据文件路径 (根据实际位置修改)
+# ============================================================
+DATA_DIR = os.path.abspath(os.path.dirname(__file__))  # 假设CSV和脚本同目录
+
+LCP_PHASE_CSV = os.path.join(DATA_DIR, "Left_circular_Phase_mm.csv")
+LCP_MAG_CSV   = os.path.join(DATA_DIR, "Left_circular_Magnitude_mm.csv")
+RCP_PHASE_CSV = os.path.join(DATA_DIR, "Right_circular_Phase_mm.csv")
+RCP_MAG_CSV   = os.path.join(DATA_DIR, "Right_circular_Magnitude_mm.csv")
+
+FEED_DISTANCE = 0.240  # 喇叭到超表面距离 240mm
+
 
 def backup_results(test_name):
     """把默认输出文件拷贝为带名字的备份"""
-    pairs = [
-        (DEFAULT_LAYOUT_PATH, f"result_{test_name}.csv"),
-        (DEFAULT_LAYOUT_PATH.replace(".csv", "_layout.png"), f"result_{test_name}_layout.png"),
-        (DEFAULT_LAYOUT_PATH.replace(".csv", "_farfield.png"), f"result_{test_name}_farfield.png"),
-    ]
-    for src, dst_name in pairs:
-        dst = os.path.join(OUTPUT_DIR, dst_name)
+    base = DEFAULT_LAYOUT_PATH.replace(".csv", "")
+    suffixes = [".csv", "_layout.png", "_farfield.png", "_incident_vs_comp.png"]
+    for sfx in suffixes:
+        src = base + sfx if sfx != ".csv" else DEFAULT_LAYOUT_PATH
+        dst = os.path.join(OUTPUT_DIR, f"result_{test_name}{sfx}")
         if os.path.exists(src):
             shutil.copy(src, dst)
+            print(f"   Saved: result_{test_name}{sfx}")
 
 
 def init_grid(radius=0.13):
-    GenerateGridLayout().call(json.dumps({"layout_type": "hex", "radius": radius}))
+    """初始化六边形阵列"""
+    res = GenerateGridLayout().call(json.dumps({
+        "layout_type": "hex",
+        "radius": radius
+    }))
+    print(f"   {res}")
+
+
+def configure_cp(eta=0.85, pol='LCP'):
+    """配置圆极化参数"""
+    res = ConfigureCPEfficiency().call(json.dumps({
+        "eta": eta,
+        "incident_pol": pol
+    }))
+    print(f"   {res}")
 
 
 def pb_and_sim(test_name):
-    CalculatePBRotation().call(json.dumps({}))
-    res = SimulateMetasurface().call(json.dumps({}))
-    print(res)
+    """PB转角计算 + 仿真 + 备份"""
+    res_pb = CalculatePBRotation().call(json.dumps({}))
+    print(f"   {res_pb}")
+    res_sim = SimulateMetasurface().call(json.dumps({}))
+    print(f"   {res_sim}")
     backup_results(test_name)
-    print(f">>> [{test_name}] Done.\n")
 
 
 # ============================================================
-# 测试 A: 球面波 → 平面波 (准直)
+# 测试 A: LCP 入射 → 平面波出射 (实测数据补偿)
 # ============================================================
-def test_collimate(focal_length=0.15):
-    name = f"collimate_f{int(focal_length*1000)}mm"
-    print(f"\n{'='*50}\n  Test: {name}\n{'='*50}")
+def test_lcp_collimate(eta=0.85):
+    name = "LCP_collimate"
+    print(f"\n{'='*60}")
+    print(f"  Test A: {name} (LCP feed → plane wave)")
+    print(f"{'='*60}")
+    
+    # 1. 初始化阵列
+    print(">>> Step 1: Init grid")
     init_grid()
-    res = ApplyCollimateLens().call(json.dumps({
-        "focal_length": focal_length,
-        "mode": "overwrite"
+    
+    # 2. 配置 LCP 入射
+    print(">>> Step 2: Configure CP (LCP)")
+    configure_cp(eta=eta, pol='LCP')
+    
+    # 3. 加载实测数据并计算补偿相位
+    print(">>> Step 3: Load measured LCP data & compute compensation")
+    res = ApplyMeasuredCompensation().call(json.dumps({
+        "phase_csv": LCP_PHASE_CSV,
+        "magnitude_csv": LCP_MAG_CSV
     }))
-    print(res)
+    print(f"   {res}")
+    
+    # 4. PB转角 + 仿真
+    print(">>> Step 4: PB rotation & Simulation")
     pb_and_sim(name)
+    print(f"\n>>> Test A [{name}] COMPLETE.\n")
 
 
 # ============================================================
-# 测试 B: Bessel 非衍射波束
+# 测试 B: RCP 入射 → 平面波出射 (实测数据补偿)
 # ============================================================
-def test_bessel(cone_angle=10):
-    name = f"bessel_{cone_angle}deg"
-    print(f"\n{'='*50}\n  Test: {name}\n{'='*50}")
+def test_rcp_collimate(eta=0.85):
+    name = "RCP_collimate"
+    print(f"\n{'='*60}")
+    print(f"  Test B: {name} (RCP feed → plane wave)")
+    print(f"{'='*60}")
+    
+    print(">>> Step 1: Init grid")
     init_grid()
-    res = ApplyAxiconPhase().call(json.dumps({
-        "cone_angle_deg": cone_angle,
-        "mode": "overwrite"
+    
+    print(">>> Step 2: Configure CP (RCP)")
+    configure_cp(eta=eta, pol='RCP')
+    
+    print(">>> Step 3: Load measured RCP data & compute compensation")
+    res = ApplyMeasuredCompensation().call(json.dumps({
+        "phase_csv": RCP_PHASE_CSV,
+        "magnitude_csv": RCP_MAG_CSV
     }))
-    print(res)
+    print(f"   {res}")
+    
+    print(">>> Step 4: PB rotation & Simulation")
     pb_and_sim(name)
+    print(f"\n>>> Test B [{name}] COMPLETE.\n")
 
 
 # ============================================================
-# 测试 C: Airy 自加速波束
+# 测试 C: LCP 入射 → 补偿 + 波束偏转
 # ============================================================
-def test_airy(coeff=5e6):
-    name = "airy_beam"
-    print(f"\n{'='*50}\n  Test: {name}\n{'='*50}")
+def test_lcp_collimate_steer(eta=0.85, theta=20, phi=0):
+    name = f"LCP_collimate_steer_t{theta}_p{phi}"
+    print(f"\n{'='*60}")
+    print(f"  Test C: {name}")
+    print(f"{'='*60}")
+    
+    print(">>> Step 1: Init grid")
     init_grid()
-    res = ApplyAiryPhase().call(json.dumps({
-        "cubic_coeff": coeff,
-        "separable": True,
-        "mode": "overwrite"
+    
+    print(">>> Step 2: Configure CP (LCP)")
+    configure_cp(eta=eta, pol='LCP')
+    
+    # 先补偿
+    print(">>> Step 3: Load LCP data & compensate")
+    res = ApplyMeasuredCompensation().call(json.dumps({
+        "phase_csv": LCP_PHASE_CSV,
+        "magnitude_csv": LCP_MAG_CSV
     }))
-    print(res)
-    pb_and_sim(name)
-
-
-# ============================================================
-# 测试 D: 波束偏转 30°
-# ============================================================
-def test_steering(theta=30, phi=0):
-    name = f"steer_theta{theta}_phi{phi}"
-    print(f"\n{'='*50}\n  Test: {name}\n{'='*50}")
-    init_grid()
+    print(f"   {res}")
+    
+    # 再叠加偏转相位
+    print(f">>> Step 4: Add beam steering (θ={theta}°, φ={phi}°)")
     res = ApplyBeamSteering().call(json.dumps({
         "steer_theta_deg": theta,
         "steer_phi_deg": phi,
-        "mode": "overwrite"
-    }))
-    print(res)
-    pb_and_sim(name)
-
-
-# ============================================================
-# 测试 E: 组合功能 — 准直 + 偏转 (球面波入射, 平面波斜出射)
-# ============================================================
-def test_collimate_then_steer(f=0.15, theta=20, phi=45):
-    name = f"collimate_steer_t{theta}_p{phi}"
-    print(f"\n{'='*50}\n  Test: {name}\n{'='*50}")
-    init_grid()
-    
-    # 第一步: 准直 (overwrite)
-    res1 = ApplyCollimateLens().call(json.dumps({
-        "focal_length": f,
-        "mode": "overwrite"
-    }))
-    print(res1)
-    
-    # 第二步: 偏转 (add, 叠加到准直相位上)
-    res2 = ApplyBeamSteering().call(json.dumps({
-        "steer_theta_deg": theta,
-        "steer_phi_deg": phi,
         "mode": "add"
     }))
-    print(res2)
+    print(f"   {res}")
     
+    print(">>> Step 5: PB rotation & Simulation")
     pb_and_sim(name)
+    print(f"\n>>> Test C [{name}] COMPLETE.\n")
 
 
 # ============================================================
-# 测试 F: 组合功能 — 准直 + Bessel (球面波入射, 非衍射输出)
+# 测试 D: LCP 入射 → 补偿 + Bessel 波束
 # ============================================================
-def test_collimate_then_bessel(f=0.15, cone=8):
-    name = f"collimate_bessel_{cone}deg"
-    print(f"\n{'='*50}\n  Test: {name}\n{'='*50}")
+def test_lcp_collimate_bessel(eta=0.85, cone=10):
+    name = f"LCP_collimate_bessel_{cone}deg"
+    print(f"\n{'='*60}")
+    print(f"  Test D: {name}")
+    print(f"{'='*60}")
+    
+    print(">>> Step 1: Init grid")
     init_grid()
     
-    res1 = ApplyCollimateLens().call(json.dumps({
-        "focal_length": f,
-        "mode": "overwrite"
-    }))
-    print(res1)
+    print(">>> Step 2: Configure CP (LCP)")
+    configure_cp(eta=eta, pol='LCP')
     
-    res2 = ApplyAxiconPhase().call(json.dumps({
+    print(">>> Step 3: Load LCP data & compensate")
+    res = ApplyMeasuredCompensation().call(json.dumps({
+        "phase_csv": LCP_PHASE_CSV,
+        "magnitude_csv": LCP_MAG_CSV
+    }))
+    print(f"   {res}")
+    
+    print(f">>> Step 4: Add Bessel axicon (cone={cone}°)")
+    res = ApplyAxiconPhase().call(json.dumps({
         "cone_angle_deg": cone,
         "mode": "add"
     }))
-    print(res2)
+    print(f"   {res}")
     
+    print(">>> Step 5: PB rotation & Simulation")
     pb_and_sim(name)
+    print(f"\n>>> Test D [{name}] COMPLETE.\n")
+
+
+# ============================================================
+# 测试 E: LCP 入射 → 补偿 + Airy 波束
+# ============================================================
+def test_lcp_collimate_airy(eta=0.85, coeff=5e6):
+    name = "LCP_collimate_airy"
+    print(f"\n{'='*60}")
+    print(f"  Test E: {name}")
+    print(f"{'='*60}")
+    
+    print(">>> Step 1: Init grid")
+    init_grid()
+    
+    print(">>> Step 2: Configure CP (LCP)")
+    configure_cp(eta=eta, pol='LCP')
+    
+    print(">>> Step 3: Load LCP data & compensate")
+    res = ApplyMeasuredCompensation().call(json.dumps({
+        "phase_csv": LCP_PHASE_CSV,
+        "magnitude_csv": LCP_MAG_CSV
+    }))
+    print(f"   {res}")
+    
+    print(f">>> Step 4: Add Airy cubic phase (a3={coeff:.1e})")
+    res = ApplyAiryPhase().call(json.dumps({
+        "cubic_coeff": coeff,
+        "separable": True,
+        "mode": "add"
+    }))
+    print(f"   {res}")
+    
+    print(">>> Step 5: PB rotation & Simulation")
+    pb_and_sim(name)
+    print(f"\n>>> Test E [{name}] COMPLETE.\n")
+
+
+# ============================================================
+# 测试 F: LCP 入射 → 补偿 + 达曼光栅 (多波束)
+# ============================================================
+def test_lcp_collimate_dammann(eta=0.85, beam_order=3):
+    name = f"LCP_collimate_dammann_{beam_order}x{beam_order}"
+    print(f"\n{'='*60}")
+    print(f"  Test F: {name}")
+    print(f"{'='*60}")
+    
+    print(">>> Step 1: Init grid")
+    init_grid()
+    
+    print(">>> Step 2: Configure CP (LCP)")
+    configure_cp(eta=eta, pol='LCP')
+    
+    print(">>> Step 3: Load LCP data & compensate")
+    res = ApplyMeasuredCompensation().call(json.dumps({
+        "phase_csv": LCP_PHASE_CSV,
+        "magnitude_csv": LCP_MAG_CSV
+    }))
+    print(f"   {res}")
+    
+    print(f">>> Step 4: Add {beam_order}x{beam_order} Dammann grating")
+    res = ApplyDammannGrating().call(json.dumps({
+        "beam_order": beam_order,
+        "period_multiple": 12
+    }))
+    print(f"   {res}")
+    
+    print(">>> Step 5: PB rotation & Simulation")
+    pb_and_sim(name)
+    print(f"\n>>> Test F [{name}] COMPLETE.\n")
+
+
+# ============================================================
+# 测试 G: 对比 — 理论公式准直 vs 实测数据补偿
+# ============================================================
+def test_compare_theoretical_vs_measured(eta=0.85):
+    """对比理论公式和实测补偿的远场差异"""
+    
+    # G1: 理论准直
+    name_theo = "LCP_theoretical_collimate"
+    print(f"\n{'='*60}")
+    print(f"  Test G1: {name_theo} (theoretical formula)")
+    print(f"{'='*60}")
+    
+    init_grid()
+    configure_cp(eta=eta, pol='LCP')
+    
+    # 使用理论公式
+    res = ApplyCollimateLens().call(json.dumps({
+        "focal_length": FEED_DISTANCE,
+        "mode": "overwrite"
+    }))
+    print(f"   {res}")
+    
+    # 加载实测幅度 (仅幅度, 不用实测相位)
+    import pandas as pd_local
+    df = pd_local.read_csv(DEFAULT_LAYOUT_PATH)
+    if os.path.exists(LCP_MAG_CSV):
+        from agent_tools import parse_measured_csv, interpolate_to_hex_grid
+        xm, ym, mag_2d = parse_measured_csv(LCP_MAG_CSV)
+        measured_mag = interpolate_to_hex_grid(xm, ym, mag_2d, df['x'].values, df['y'].values)
+        df['measured_mag'] = np.clip(measured_mag, 0, None)
+        df['mag'] = df['measured_mag']
+        df.to_csv(DEFAULT_LAYOUT_PATH, index=False)
+    
+    pb_and_sim(name_theo)
+    
+    # G2: 实测补偿 (已在 Test A 中做过，这里再做一次方便对比)
+    test_lcp_collimate(eta=eta)
+    
+    print("\n>>> Compare result_LCP_theoretical_collimate_farfield.png")
+    print(">>>     vs  result_LCP_collimate_farfield.png")
+    print(">>> Measured compensation should show a tighter broadside beam.\n")
 
 
 # ============================================================
 
 if __name__ == "__main__":
-    # 基础功能测试
-    test_collimate(focal_length=0.15)       # A: 准直
-    test_bessel(cone_angle=10)              # B: Bessel
-    test_airy(coeff=5e6)                    # C: Airy
-    test_steering(theta=30, phi=0)          # D: 偏转
-
-    # 组合功能测试 (创新点)
-    test_collimate_then_steer(f=0.15, theta=20, phi=45)   # E: 准直+偏转
-    test_collimate_then_bessel(f=0.15, cone=8)             # F: 准直+Bessel
+    print("=" * 60)
+    print("  Metasurface Test Suite — Measured Feed Compensation")
+    print(f"  Feed distance: {FEED_DISTANCE*1000:.0f} mm")
+    print(f"  Working freq: {CONSTANTS['freq']/1e9:.1f} GHz")
+    print(f"  Unit cell: {CONSTANTS['p']*1000:.1f} mm")
+    print("=" * 60)
+    
+    # ===== 核心测试: 实测数据补偿 =====
+    test_lcp_collimate(eta=0.85)         # A: LCP → 平面波
+    # test_rcp_collimate(eta=0.85)       # B: RCP → 平面波 (需要RCP的CSV文件)
+    
+    # ===== 组合功能测试 =====
+    # test_lcp_collimate_steer(eta=0.85, theta=20, phi=0)    # C: 补偿+偏转
+    # test_lcp_collimate_bessel(eta=0.85, cone=10)            # D: 补偿+Bessel
+    # test_lcp_collimate_airy(eta=0.85, coeff=5e6)            # E: 补偿+Airy
+    # test_lcp_collimate_dammann(eta=0.85, beam_order=3)      # F: 补偿+达曼
+    
+    # ===== 对比测试 =====
+    # test_compare_theoretical_vs_measured(eta=0.85)  # G: 理论 vs 实测
+    
+    print("\n" + "=" * 60)
+    print("  All tests complete. Check outputs/ directory.")
+    print("=" * 60)
