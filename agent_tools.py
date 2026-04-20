@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib import colors
 from matplotlib.patches import RegularPolygon
 from matplotlib.collections import PatchCollection
-
+import traceback
+import json
 # 尝试导入qwen_agent，如果不可用则提供桩
 try:
     from qwen_agent.tools.base import BaseTool, register_tool
@@ -363,9 +364,15 @@ class ApplyAxiconPhase(BaseTool):
             "required": False,
         },
         {
+            "name": "xy_unit",
+            "type": "string",
+            "description": "'m' or 'mm'. Must match the unit of x/y in the CSV. Default 'm'.",
+            "required": False,
+        },
+        {
             "name": "mode",
             "type": "string",
-            "description": '"overwrite" or "add".',
+            "description": '"overwrite" or "add". Default "overwrite".',
             "required": False,
         },
         {
@@ -378,34 +385,85 @@ class ApplyAxiconPhase(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         try:
-            import json
-
             p = json.loads(params)
             alpha_deg = float(p.get("cone_angle_deg", 10.0))
-            mode = p.get("mode", "overwrite")
+            xy_unit   = p.get("xy_unit", "m")
+            mode      = p.get("mode", "overwrite")
             file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
+
             df = pd.read_csv(file_path)
-            k = CONSTANTS["k"]
+            x_raw = df["x"].values
+            y_raw = df["y"].values
+
+            # ✅ 统一转换到 m，与 k (rad/m) 保持一致
+            if xy_unit == "mm":
+                x_m = x_raw * 1e-3
+                y_m = y_raw * 1e-3
+            elif xy_unit == "m":
+                x_m = x_raw
+                y_m = y_raw
+            else:
+                return f"Error: xy_unit must be 'm' or 'mm', got '{xy_unit}'."
+
+            # ✅ k 单位 rad/m，与转换后的坐标（m）一致
+            k     = CONSTANTS["k"]          # rad/m
+            lam   = CONSTANTS["lambda"]     # m
             alpha = np.radians(alpha_deg)
-            rho = np.sqrt(df["x"].values ** 2 + df["y"].values ** 2)
-            axicon_phase = -k * np.sin(alpha) * rho
+            rho   = np.sqrt(x_m**2 + y_m**2)   # m
+
+            # ✅ Axicon相位公式
+            axicon_phase = -k * np.sin(alpha) * rho   # rad
+
+            # ✅ 诊断信息
+            R      = rho.max()
+            z_max  = R / np.tan(alpha)               # Bessel非衍射距离 (m)
+            z_max_approx = R / np.sin(alpha)         # 近似值
+            phase_cycles = (k * np.sin(alpha) * R) / (2 * np.pi)
+
+            print(f"[Axicon Diagnostics]")
+            print(f"  λ          = {lam*1e3:.2f} mm")
+            print(f"  k          = {k:.2f} rad/m")
+            print(f"  α          = {alpha_deg}°")
+            print(f"  R (半径)    = {R*1e3:.1f} mm")
+            print(f"  相位周期数  = {phase_cycles:.1f} cycles")
+            print(f"  非衍射距离  = {z_max*1e3:.1f} mm  (tan近似)")
+            print(f"             ≈ {z_max_approx*1e3:.1f} mm  (sin近似)")
+
+            if phase_cycles < 2:
+                print(f"[WARNING] 相位周期数 < 2，Bessel效果弱，建议增大 cone_angle_deg")
+            elif phase_cycles > 200:
+                print(f"[WARNING] 相位周期数 > 200，采样可能不足")
+            else:
+                print(f"[OK] 相位周期数合理")
+
+            # ✅ wrapping
+            wrapped = axicon_phase % (2 * np.pi)
+
             if "target_phase" not in df.columns:
                 df["target_phase"] = 0.0
+
             if mode == "overwrite":
-                df["target_phase"] = axicon_phase
+                df["target_phase"] = wrapped
             else:
-                df["target_phase"] += axicon_phase
-            df["target_phase"] = df["target_phase"] % (2 * np.pi)
+                df["target_phase"] = (df["target_phase"] + axicon_phase) % (2 * np.pi)
+
             df.to_csv(file_path, index=False)
-            return f"Axicon phase applied. Cone={alpha_deg}°. Units: {len(df)}"
+
+            return (
+                f"Axicon phase applied. "
+                f"cone={alpha_deg}°, "
+                f"xy_unit='{xy_unit}', "
+                f"λ={lam*1e3:.2f}mm, "
+                f"phase_cycles={phase_cycles:.1f}, "
+                f"z_max={z_max*1e3:.1f}mm, "
+                f"units={len(df)}"
+            )
+
         except Exception as e:
-            import traceback
-
             return f"Error: {traceback.format_exc()}"
-
-
 # ================= Tool 7: Airy波束 =================
 
 
@@ -416,19 +474,34 @@ class ApplyAiryPhase(BaseTool):
         {
             "name": "cubic_coeff",
             "type": "number",
-            "description": "Cubic coefficient. Default 5e6.",
+            "description": (
+                "Cubic coefficient in rad/m³ (if xy_unit='m') or rad/mm³ (if xy_unit='mm'). "
+                "Recommended ~8.6e4 for m, ~8.6e-5 for mm (10 phase cycles over 90mm aperture)."
+            ),
+            "required": False,
+        },
+        {
+            "name": "xy_unit",
+            "type": "string",
+            "description": "'m' or 'mm'. Must match the unit of x/y in the CSV. Default 'm'.",
+            "required": False,
+        },
+        {
+            "name": "n_cycles",
+            "type": "number",
+            "description": "Target phase cycles across half-aperture. Used only if cubic_coeff is not provided. Default 10.",
             "required": False,
         },
         {
             "name": "separable",
             "type": "boolean",
-            "description": "Separable 2D. Default true.",
+            "description": "True: phi=a3*(x³+y³); False: only x direction phi=a3*x³. Default True.",
             "required": False,
         },
         {
             "name": "mode",
             "type": "string",
-            "description": '"overwrite" or "add".',
+            "description": '"overwrite" or "add". Default "overwrite".',
             "required": False,
         },
         {
@@ -441,36 +514,85 @@ class ApplyAiryPhase(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         try:
-            import json
-
             p = json.loads(params)
-            a3 = float(p.get("cubic_coeff", 5e6))
+            xy_unit  = p.get("xy_unit", "m")
             separable = p.get("separable", True)
-            mode = p.get("mode", "overwrite")
+            mode     = p.get("mode", "overwrite")
             file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
+
             df = pd.read_csv(file_path)
-            x, y = df["x"].values, df["y"].values
-            if separable:
-                airy_phase = a3 * (x**3 + y**3)
+            x_raw = df["x"].values
+            y_raw = df["y"].values
+
+            # ✅ 统一转换到 m 进行计算
+            if xy_unit == "mm":
+                x_m = x_raw * 1e-3
+                y_m = y_raw * 1e-3
+            elif xy_unit == "m":
+                x_m = x_raw
+                y_m = y_raw
             else:
-                airy_phase = a3 * (np.sqrt(x**2 + y**2)) ** 3
+                return f"Error: xy_unit must be 'm' or 'mm', got '{xy_unit}'."
+
+            # ✅ 自动推算 coeff（若未提供）
+            if "cubic_coeff" in p:
+                a3 = float(p["cubic_coeff"])
+            else:
+                n_cycles = float(p.get("n_cycles", 10))
+                x_max = np.max(np.abs(x_m))
+                if x_max < 1e-9:
+                    return "Error: x values are all zero."
+                a3 = n_cycles * 2 * np.pi / (x_max ** 3)
+                print(f"[AutoCoeff] x_max={x_max:.4f}m, "
+                      f"n_cycles={n_cycles}, a3={a3:.3e} rad/m³")
+
+            # ✅ 计算Airy相位（单位：rad）
+            if separable:
+                airy_phase = a3 * (x_m**3 + y_m**3)   # 二维可分
+            else:
+                airy_phase = a3 * (x_m**3)              # 仅x方向自加速
+
+            # ✅ 诊断信息
+            phase_range = airy_phase.max() - airy_phase.min()
+            n_cycles_actual = phase_range / (2 * np.pi)
+
+            if n_cycles_actual > 100:
+                print(f"[WARNING] Phase cycles={n_cycles_actual:.1f} > 100, "
+                      f"may be under-sampled! Consider reducing cubic_coeff.")
+            elif n_cycles_actual < 2:
+                print(f"[WARNING] Phase cycles={n_cycles_actual:.1f} < 2, "
+                      f"modulation too weak! Consider increasing cubic_coeff.")
+            else:
+                print(f"[OK] Phase cycles={n_cycles_actual:.1f}, looks reasonable.")
+
+            # ✅ wrapping 到 [0, 2π]
+            wrapped = airy_phase % (2 * np.pi)
+
             if "target_phase" not in df.columns:
                 df["target_phase"] = 0.0
+
             if mode == "overwrite":
-                df["target_phase"] = airy_phase
+                df["target_phase"] = wrapped
             else:
-                df["target_phase"] += airy_phase
-            df["target_phase"] = df["target_phase"] % (2 * np.pi)
+                df["target_phase"] = (df["target_phase"] + airy_phase) % (2 * np.pi)
+
             df.to_csv(file_path, index=False)
-            return f"Airy phase applied. a3={a3:.2e}. Units: {len(df)}"
+
+            return (
+                f"Airy phase applied. "
+                f"a3={a3:.4e} rad/m³, "
+                f"xy_unit='{xy_unit}', "
+                f"separable={separable}, "
+                f"phase_range={phase_range:.2f} rad, "
+                f"cycles={n_cycles_actual:.1f}, "
+                f"units={len(df)}"
+            )
+
         except Exception as e:
-            import traceback
-
             return f"Error: {traceback.format_exc()}"
-
-
 # ================= Tool 8: 波束偏转 =================
 
 

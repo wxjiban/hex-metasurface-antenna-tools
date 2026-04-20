@@ -144,38 +144,38 @@ def test_lcp_collimate(eta=0.85):
 
 
 # ============================================================
-# 测试 B: RCP 入射 → 平面波出射 (实测数据补偿)
+# 测试 H: 仅生成 Airy 波束（理论公式，无实测补偿）
 # ============================================================
-def test_rcp_collimate(eta=0.85):
-    name = "RCP_collimate"
+def test_airy_only(eta=0.85, coeff=5e6):
+    name = "Airy_only"
     print(f"\n{'=' * 60}")
-    print(f"  Test B: {name} (RCP feed → plane wave)")
+    print(f"  Test H: {name} (theoretical Airy beam)")
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
     init_grid()
 
-    print(">>> Step 2: Configure CP (RCP)")
-    configure_cp(eta=eta, pol="RCP")
+    print(">>> Step 2: Configure CP (LCP)")
+    configure_cp(eta=eta, pol="LCP")
 
-    print(">>> Step 3: Load measured RCP data & compute compensation")
-    res = ApplyMeasuredCompensation().call(
-        json.dumps({"phase_csv": RCP_PHASE_CSV, "magnitude_csv": RCP_MAG_CSV})
+    print(f">>> Step 3: Apply Airy cubic phase (a3={coeff:.1e})")
+    res = ApplyAiryPhase().call(
+        json.dumps({"cubic_coeff": coeff, "separable": True, "mode": "overwrite"})
     )
     print(f"   {res}")
 
     print(">>> Step 4: PB rotation & Simulation")
     pb_and_sim(name)
-    print(f"\n>>> Test B [{name}] COMPLETE.\n")
+    print(f"\n>>> Test H [{name}] COMPLETE.\n")
 
 
 # ============================================================
-# 测试 C: LCP 入射 → 补偿 + 波束偏转
+# 测试 I: 仅生成 Bessel 波束（理论公式，无实测补偿）
 # ============================================================
-def test_lcp_collimate_steer(eta=0.85, theta=20, phi=0):
-    name = f"LCP_collimate_steer_t{theta}_p{phi}"
+def test_bessel_only(eta=0.85, cone_angle_deg=10):
+    name = f"Bessel_only_{cone_angle_deg}deg"
     print(f"\n{'=' * 60}")
-    print(f"  Test C: {name}")
+    print(f"  Test I: {name} (theoretical Bessel beam)")
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
@@ -184,85 +184,15 @@ def test_lcp_collimate_steer(eta=0.85, theta=20, phi=0):
     print(">>> Step 2: Configure CP (LCP)")
     configure_cp(eta=eta, pol="LCP")
 
-    # 先补偿
-    print(">>> Step 3: Load LCP data & compensate")
-    res = ApplyMeasuredCompensation().call(
-        json.dumps({"phase_csv": LCP_PHASE_CSV, "magnitude_csv": LCP_MAG_CSV})
+    print(f">>> Step 3: Apply axicon phase (cone={cone_angle_deg}°)")
+    res = ApplyAxiconPhase().call(
+        json.dumps({"cone_angle_deg": cone_angle_deg, "mode": "overwrite"})
     )
     print(f"   {res}")
 
-    # 再叠加偏转相位
-    print(f">>> Step 4: Add beam steering (θ={theta}°, φ={phi}°)")
-    res = ApplyBeamSteering().call(
-        json.dumps({"steer_theta_deg": theta, "steer_phi_deg": phi, "mode": "add"})
-    )
-    print(f"   {res}")
-
-    print(">>> Step 5: PB rotation & Simulation")
+    print(">>> Step 4: PB rotation & Simulation")
     pb_and_sim(name)
-    print(f"\n>>> Test C [{name}] COMPLETE.\n")
-
-
-# ============================================================
-# 测试 D: LCP 入射 → 补偿 + Bessel 波束
-# ============================================================
-def test_lcp_collimate_bessel(eta=0.85, cone=10):
-    name = f"LCP_collimate_bessel_{cone}deg"
-    print(f"\n{'=' * 60}")
-    print(f"  Test D: {name}")
-    print(f"{'=' * 60}")
-
-    print(">>> Step 1: Init grid")
-    init_grid()
-
-    print(">>> Step 2: Configure CP (LCP)")
-    configure_cp(eta=eta, pol="LCP")
-
-    print(">>> Step 3: Load LCP data & compensate")
-    res = ApplyMeasuredCompensation().call(
-        json.dumps({"phase_csv": LCP_PHASE_CSV, "magnitude_csv": LCP_MAG_CSV})
-    )
-    print(f"   {res}")
-
-    print(f">>> Step 4: Add Bessel axicon (cone={cone}°)")
-    res = ApplyAxiconPhase().call(json.dumps({"cone_angle_deg": cone, "mode": "add"}))
-    print(f"   {res}")
-
-    print(">>> Step 5: PB rotation & Simulation")
-    pb_and_sim(name)
-    print(f"\n>>> Test D [{name}] COMPLETE.\n")
-
-
-# ============================================================
-# 测试 E: LCP 入射 → 补偿 + Airy 波束
-# ============================================================
-def test_lcp_collimate_airy(eta=0.85, coeff=5e6):
-    name = "LCP_collimate_airy"
-    print(f"\n{'=' * 60}")
-    print(f"  Test E: {name}")
-    print(f"{'=' * 60}")
-
-    print(">>> Step 1: Init grid")
-    init_grid()
-
-    print(">>> Step 2: Configure CP (LCP)")
-    configure_cp(eta=eta, pol="LCP")
-
-    print(">>> Step 3: Load LCP data & compensate")
-    res = ApplyMeasuredCompensation().call(
-        json.dumps({"phase_csv": LCP_PHASE_CSV, "magnitude_csv": LCP_MAG_CSV})
-    )
-    print(f"   {res}")
-
-    print(f">>> Step 4: Add Airy cubic phase (a3={coeff:.1e})")
-    res = ApplyAiryPhase().call(
-        json.dumps({"cubic_coeff": coeff, "separable": True, "mode": "add"})
-    )
-    print(f"   {res}")
-
-    print(">>> Step 5: PB rotation & Simulation")
-    pb_and_sim(name)
-    print(f"\n>>> Test E [{name}] COMPLETE.\n")
+    print(f"\n>>> Test I [{name}] COMPLETE.\n")
 
 
 # ============================================================
@@ -342,9 +272,6 @@ def test_compare_theoretical_vs_measured(eta=0.85):
     print(">>>     vs  result_LCP_collimate_farfield.png")
     print(">>> Measured compensation should show a tighter broadside beam.\n")
 
-
-# ============================================================
-
 if __name__ == "__main__":
     print("=" * 60)
     print("  Metasurface Test Suite — Measured Feed Compensation")
@@ -355,36 +282,12 @@ if __name__ == "__main__":
 
     backup_outputs_auto()
 
-    # ===== 核心测试: 实测数据补偿 =====
-    test_lcp_collimate(eta=0.85)  # A: LCP → 平面波
-    # test_rcp_collimate(eta=0.85)       # B: RCP → 平面波 (需要RCP的CSV文件)
+    test_bessel_only(eta=0.85, cone_angle_deg=60)   # 建议同时测大角度
 
-    # ===== 组合功能测试 =====
-    # test_lcp_collimate_steer(eta=0.85, theta=20, phi=0)    # C: 补偿+偏转
-    # test_lcp_collimate_bessel(eta=0.85, cone=10)            # D: 补偿+Bessel
-    # test_lcp_collimate_airy(eta=0.85, coeff=5e6)            # E: 补偿+Airy
-    # test_lcp_collimate_dammann(eta=0.85, beam_order=3)      # F: 补偿+达曼
-
-    # ===== 对比测试 =====
-    # test_compare_theoretical_vs_measured(eta=0.85)  # G: 理论 vs 实测
+    # ✅ Airy波束 - 合理coeff
+    test_airy_only(coeff=8.6e4)
 
     print("\n" + "=" * 60)
-    print("  All tests complete. Check outputs/ directory.")
+    print("  All tests complete. Check outputs_backup/ directory.")
     print("=" * 60)
 
-    # ===== 核心测试: 实测数据补偿 =====
-    test_lcp_collimate(eta=0.85)  # A: LCP → 平面波
-    # test_rcp_collimate(eta=0.85)       # B: RCP → 平面波 (需要RCP的CSV文件)
-
-    # ===== 组合功能测试 =====
-    # test_lcp_collimate_steer(eta=0.85, theta=20, phi=0)    # C: 补偿+偏转
-    # test_lcp_collimate_bessel(eta=0.85, cone=10)            # D: 补偿+Bessel
-    # test_lcp_collimate_airy(eta=0.85, coeff=5e6)            # E: 补偿+Airy
-    # test_lcp_collimate_dammann(eta=0.85, beam_order=3)      # F: 补偿+达曼
-
-    # ===== 对比测试 =====
-    # test_compare_theoretical_vs_measured(eta=0.85)  # G: 理论 vs 实测
-
-    print("\n" + "=" * 60)
-    print("  All tests complete. Check outputs/ directory.")
-    print("=" * 60)
