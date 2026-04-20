@@ -1097,3 +1097,210 @@ class SimulateMetasurface(BaseTool):
             import traceback
 
             return f"Sim Error: {traceback.format_exc()}"
+
+
+# ================= Tool 11: 近场传播仿真 (角谱法) =================
+
+
+@register_tool("simulate_nearfield_propagation")
+class SimulateNearfieldPropagation(BaseTool):
+    description = "Near-field propagation via Angular Spectrum Method. Visualizes XOY slices and XOZ cross-section for Bessel/Airy beam verification."
+    parameters = [
+        {
+            "name": "z_max",
+            "type": "number",
+            "description": "Max propagation distance in meters. Default 0.5.",
+            "required": False,
+        },
+        {
+            "name": "z_steps",
+            "type": "integer",
+            "description": "Number of z slices. Default 50.",
+            "required": False,
+        },
+        {
+            "name": "grid_size",
+            "type": "integer",
+            "description": "Interpolation grid size (NxN). Default 256.",
+            "required": False,
+        },
+        {
+            "name": "test_title",
+            "type": "string",
+            "description": "Title prefix for the output plot (e.g., 'Bessel', 'Airy'). Default ''.",
+            "required": False,
+        },
+        {
+            "name": "file_path",
+            "type": "string",
+            "description": "Optional CSV path.",
+            "required": False,
+        },
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        try:
+            p = json.loads(params)
+            z_max    = float(p.get("z_max", 0.5))
+            z_steps  = int(p.get("z_steps", 50))
+            N        = int(p.get("grid_size", 256))
+            test_title = p.get("test_title", "")
+            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+
+            if not os.path.exists(file_path):
+                return f"Error: File not found at {file_path}."
+
+            df = pd.read_csv(file_path)
+            k  = CONSTANTS["k"]
+            lam = CONSTANTS["lambda"]
+
+            x_hex = df["x"].values
+            y_hex = df["y"].values
+            phase = df["target_phase"].values
+            mag   = df["mag"].values if "mag" in df.columns else np.ones(len(df))
+
+            margin = CONSTANTS["p"] * 2
+            x_min, x_max_v = x_hex.min() - margin, x_hex.max() + margin
+            y_min, y_max_v = y_hex.min() - margin, y_hex.max() + margin
+
+            xi = np.linspace(x_min, x_max_v, N)
+            yi = np.linspace(y_min, y_max_v, N)
+            XI, YI = np.meshgrid(xi, yi)
+
+            from scipy.interpolate import griddata
+            E_complex = mag * np.exp(1j * phase)
+
+            E_real = griddata(
+                (x_hex, y_hex), E_complex.real,
+                (XI, YI), method="linear", fill_value=0.0
+            )
+            E_imag = griddata(
+                (x_hex, y_hex), E_complex.imag,
+                (XI, YI), method="linear", fill_value=0.0
+            )
+            E0 = E_real + 1j * E_imag
+
+            dx = xi[1] - xi[0]
+            dy = yi[1] - yi[0]
+
+            fx = np.fft.fftfreq(N, d=dx)
+            fy = np.fft.fftfreq(N, d=dy)
+            FX, FY = np.meshgrid(fx, fy)
+
+            kx = 2 * np.pi * FX
+            ky = 2 * np.pi * FY
+            kz2 = k**2 - kx**2 - ky**2
+
+            kz = np.where(kz2 >= 0, np.sqrt(kz2), 0)
+            propagating_mask = (kz2 >= 0)
+
+            A0 = np.fft.fft2(E0)
+
+            z_arr = np.linspace(0.001, z_max, z_steps)
+
+            intensity_slices = np.zeros((z_steps, N, N))
+
+            for iz, z in enumerate(z_arr):
+                H = np.where(propagating_mask,
+                             np.exp(1j * kz * z), 0)
+                Ez = np.fft.ifft2(A0 * H)
+                intensity_slices[iz] = np.abs(Ez)**2
+
+            fig = plt.figure(figsize=(20, 16))
+
+            ax1 = fig.add_subplot(231)
+            y_center_idx = N // 2
+            xoz_slice = intensity_slices[:, y_center_idx, :]
+            xoz_slice /= xoz_slice.max() + 1e-9
+            ax1.imshow(
+                xoz_slice,
+                extent=[xi[0]*1e3, xi[-1]*1e3, z_arr[0]*1e3, z_arr[-1]*1e3],
+                origin="lower", aspect="auto", cmap="hot"
+            )
+            ax1.set_xlabel("x (mm)")
+            ax1.set_ylabel("z (mm)")
+            ax1.set_title("XOZ Slice (y=0)\n← Airy trajectory here")
+            plt.colorbar(ax1.images[0], ax=ax1, label="Norm. Intensity")
+
+            ax2 = fig.add_subplot(232)
+            x_center_idx = N // 2
+            yoz_slice = intensity_slices[:, :, x_center_idx]
+            yoz_slice /= yoz_slice.max() + 1e-9
+            ax2.imshow(
+                yoz_slice,
+                extent=[yi[0]*1e3, yi[-1]*1e3, z_arr[0]*1e3, z_arr[-1]*1e3],
+                origin="lower", aspect="auto", cmap="hot"
+            )
+            ax2.set_xlabel("y (mm)")
+            ax2.set_ylabel("z (mm)")
+            ax2.set_title("YOZ Slice (x=0)\n← Airy trajectory here")
+            plt.colorbar(ax2.images[0], ax=ax2, label="Norm. Intensity")
+
+            z_indices = [
+                z_steps // 5,
+                z_steps // 2,
+                int(z_steps * 4 / 5)
+            ]
+            z_labels = ["z_near", "z_mid", "z_far"]
+
+            for plot_idx, (zi, zlabel) in enumerate(zip(z_indices, z_labels)):
+                ax = fig.add_subplot(233 + plot_idx)
+                xoy = intensity_slices[zi]
+                xoy_norm = xoy / (xoy.max() + 1e-9)
+                im = ax.imshow(
+                    xoy_norm,
+                    extent=[xi[0]*1e3, xi[-1]*1e3,
+                            yi[0]*1e3, yi[-1]*1e3],
+                    origin="lower", cmap="hot", vmin=0, vmax=1
+                )
+                ax.set_xlabel("x (mm)")
+                ax.set_ylabel("y (mm)")
+                ax.set_title(
+                    f"XOY @ z={z_arr[zi]*1e3:.0f}mm ({zlabel})\n"
+                    f"← Bessel rings here"
+                )
+                plt.colorbar(im, ax=ax, label="Norm. Intensity")
+
+            ax6 = fig.add_subplot(236)
+            cx_arr = np.zeros(z_steps)
+            cy_arr = np.zeros(z_steps)
+
+            for iz in range(z_steps):
+                sl = intensity_slices[iz]
+                total = sl.sum() + 1e-9
+                cx_arr[iz] = (sl * XI).sum() / total * 1e3
+                cy_arr[iz] = (sl * YI).sum() / total * 1e3
+
+            ax6.plot(z_arr * 1e3, cx_arr, label="x centroid", color="red")
+            ax6.plot(z_arr * 1e3, cy_arr, label="y centroid", color="blue")
+            ax6.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+            ax6.set_xlabel("z (mm)")
+            ax6.set_ylabel("Centroid position (mm)")
+            ax6.set_title("Main lobe trajectory\n← Airy: should curve parabolically")
+            ax6.legend()
+            ax6.grid(True, alpha=0.3)
+
+            plt.suptitle(
+                f"{test_title}  |  Near-field Propagation  |  z: 0 ~ {z_max*1e3:.0f}mm  |  "
+                f"λ={lam*1e3:.1f}mm",
+                fontsize=13
+            )
+            plt.tight_layout()
+
+            img_path = file_path.replace(".csv", "_nearfield.png")
+            plt.savefig(img_path, dpi=150, bbox_inches="tight")
+            plt.close()
+
+            peak_z_idx = np.array(
+                [intensity_slices[iz].max() for iz in range(z_steps)]
+            ).argmax()
+
+            return (
+                f"Near-field propagation done.\n"
+                f" - Grid: {N}x{N}, z: 0~{z_max*1e3:.0f}mm ({z_steps} slices)\n"
+                f" - Peak intensity @ z={z_arr[peak_z_idx]*1e3:.1f}mm\n"
+                f" - Output: {img_path}"
+            )
+
+        except Exception as e:
+            return f"Error: {traceback.format_exc()}"

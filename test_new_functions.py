@@ -15,6 +15,7 @@ from agent_tools import (
     ApplyDammannGrating,
     CalculatePBRotation,
     SimulateMetasurface,
+    SimulateNearfieldPropagation,
     DEFAULT_LAYOUT_PATH,
     OUTPUT_DIR,
 )
@@ -77,7 +78,7 @@ def backup_results(test_name):
         return
 
     base = DEFAULT_LAYOUT_PATH.replace(".csv", "")
-    for sfx in [".csv", "_layout.png", "_farfield.png", "_incident_vs_comp.png"]:
+    for sfx in [".csv", "_layout.png", "_farfield.png", "_incident_vs_comp.png", "_nearfield.png"]:
         src = base + sfx if sfx != ".csv" else DEFAULT_LAYOUT_PATH
         dst = os.path.join(_current_backup_dir, f"result_{test_name}{sfx}")
         if os.path.exists(src):
@@ -164,6 +165,15 @@ def test_airy_only(eta=0.85, coeff=5e6):
     )
     print(f"   {res}")
 
+    print(">>> Step 3b: Near-field propagation (Airy trajectory)")
+    res_nf = SimulateNearfieldPropagation().call(json.dumps({
+        "z_max": 0.8,
+        "z_steps": 80,
+        "grid_size": 256,
+        "test_title": f"Airy (a3={coeff:.1e})"
+    }))
+    print(f"   {res_nf}")
+
     print(">>> Step 4: PB rotation & Simulation")
     pb_and_sim(name)
     print(f"\n>>> Test H [{name}] COMPLETE.\n")
@@ -189,6 +199,15 @@ def test_bessel_only(eta=0.85, cone_angle_deg=10):
         json.dumps({"cone_angle_deg": cone_angle_deg, "mode": "overwrite"})
     )
     print(f"   {res}")
+
+    print(">>> Step 3b: Near-field propagation (Bessel verification)")
+    res_nf = SimulateNearfieldPropagation().call(json.dumps({
+        "z_max": 0.6,
+        "z_steps": 60,
+        "grid_size": 256,
+        "test_title": f"Bessel (cone={cone_angle_deg}°)"
+    }))
+    print(f"   {res_nf}")
 
     print(">>> Step 4: PB rotation & Simulation")
     pb_and_sim(name)
