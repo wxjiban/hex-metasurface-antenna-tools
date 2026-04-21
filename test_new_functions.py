@@ -91,7 +91,7 @@ def backup_results(test_name):
     print(f"[CLEANUP] outputs/ cleared")
 
 
-def init_grid(radius=0.08):
+def init_grid(radius=0.13):
     """初始化六边形阵列"""
     res = GenerateGridLayout().call(
         json.dumps({"layout_type": "hex", "radius": radius})
@@ -182,14 +182,14 @@ def test_airy_only(eta=0.85, coeff=5e6):
 # ============================================================
 # 测试 I: 仅生成 Bessel 波束（理论公式，无实测补偿）
 # ============================================================
-def test_bessel_only(eta=0.85, cone_angle_deg=10):
+def test_bessel_only(eta=0.85, cone_angle_deg=60):   # ← 默认改60
     name = f"Bessel_only_{cone_angle_deg}deg"
     print(f"\n{'=' * 60}")
     print(f"  Test I: {name} (theoretical Bessel beam)")
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
-    init_grid()
+    init_grid(radius=0.08)
 
     print(">>> Step 2: Configure CP (LCP)")
     configure_cp(eta=eta, pol="LCP")
@@ -200,16 +200,22 @@ def test_bessel_only(eta=0.85, cone_angle_deg=10):
     )
     print(f"   {res}")
 
-    print(">>> Step 3b: Near-field propagation (Bessel verification)")
+    # ✅ 先算PB旋转角，再做近场仿真，顺序正确
+    print(">>> Step 4: PB rotation")
+    res_pb = CalculatePBRotation().call(json.dumps({}))
+    print(f"   {res_pb}")
+
+    # ✅ z_max改为200mm，聚焦在有效区域
+    print(">>> Step 5: Near-field propagation (Bessel verification)")
     res_nf = SimulateNearfieldPropagation().call(json.dumps({
-        "z_max": 0.6,
-        "z_steps": 60,
+        "z_max": 0.20,          # 200mm，覆盖非衍射区+衰减区
+        "z_steps": 80,          # 每2.5mm一截面
         "grid_size": 256,
         "test_title": f"Bessel (cone={cone_angle_deg}°)"
     }))
     print(f"   {res_nf}")
 
-    print(">>> Step 4: PB rotation & Simulation")
+    print(">>> Step 6: Far-field simulation")
     pb_and_sim(name)
     print(f"\n>>> Test I [{name}] COMPLETE.\n")
 

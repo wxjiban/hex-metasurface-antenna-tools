@@ -133,7 +133,7 @@ class GenerateGridLayout(BaseTool):
 
             p = json.loads(params)
             layout_type = p.get("layout_type", "hex")
-            radius = float(p.get("radius", 0.08))
+            radius = float(p.get("radius", 0.13))
             save_path = p.get("output_path") or DEFAULT_LAYOUT_PATH
             period = CONSTANTS["p"]
             xyset = set()
