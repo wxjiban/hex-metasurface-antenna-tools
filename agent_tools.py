@@ -1136,22 +1136,29 @@ class SimulateNearfieldPropagation(BaseTool):
             "description": "Optional CSV path.",
             "required": False,
         },
+        {
+            "name": "n_xoy_slices",        # ← 新增参数
+            "type": "integer",
+            "description": "Number of XOY slices to plot in the extra slice figure. Default 16.",
+            "required": False,
+        },
     ]
 
     def call(self, params: str, **kwargs) -> str:
         try:
             p = json.loads(params)
-            z_max    = float(p.get("z_max", 0.5))
-            z_steps  = int(p.get("z_steps", 50))
-            N        = int(p.get("grid_size", 256))
-            test_title = p.get("test_title", "")
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            z_max        = float(p.get("z_max", 0.5))
+            z_steps      = int(p.get("z_steps", 50))
+            N            = int(p.get("grid_size", 256))
+            test_title   = p.get("test_title", "")
+            file_path    = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            n_xoy_slices = int(p.get("n_xoy_slices", 16))   # ← 新增
 
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
 
-            df = pd.read_csv(file_path)
-            k  = CONSTANTS["k"]
+            df  = pd.read_csv(file_path)
+            k   = CONSTANTS["k"]
             lam = CONSTANTS["lambda"]
 
             x_hex = df["x"].values
@@ -1159,7 +1166,7 @@ class SimulateNearfieldPropagation(BaseTool):
             phase = df["target_phase"].values
             mag   = df["mag"].values if "mag" in df.columns else np.ones(len(df))
 
-            margin = CONSTANTS["p"] * 2
+            margin      = CONSTANTS["p"] * 2
             x_min, x_max_v = x_hex.min() - margin, x_hex.max() + margin
             y_min, y_max_v = y_hex.min() - margin, y_hex.max() + margin
 
@@ -1169,49 +1176,38 @@ class SimulateNearfieldPropagation(BaseTool):
 
             from scipy.interpolate import griddata
             E_complex = mag * np.exp(1j * phase)
-
-            E_real = griddata(
-                (x_hex, y_hex), E_complex.real,
-                (XI, YI), method="linear", fill_value=0.0
-            )
-            E_imag = griddata(
-                (x_hex, y_hex), E_complex.imag,
-                (XI, YI), method="linear", fill_value=0.0
-            )
+            E_real = griddata((x_hex, y_hex), E_complex.real, (XI, YI), method="linear", fill_value=0.0)
+            E_imag = griddata((x_hex, y_hex), E_complex.imag, (XI, YI), method="linear", fill_value=0.0)
             E0 = E_real + 1j * E_imag
 
             dx = xi[1] - xi[0]
             dy = yi[1] - yi[0]
-
             fx = np.fft.fftfreq(N, d=dx)
             fy = np.fft.fftfreq(N, d=dy)
             FX, FY = np.meshgrid(fx, fy)
-
-            kx = 2 * np.pi * FX
-            ky = 2 * np.pi * FY
+            kx  = 2 * np.pi * FX
+            ky  = 2 * np.pi * FY
             kz2 = k**2 - kx**2 - ky**2
-
-            kz = np.where(kz2 >= 0, np.sqrt(kz2), 0)
+            kz  = np.where(kz2 >= 0, np.sqrt(kz2), 0)
             propagating_mask = (kz2 >= 0)
-
-            A0 = np.fft.fft2(E0)
+            A0  = np.fft.fft2(E0)
 
             z_arr = np.linspace(0.001, z_max, z_steps)
-
             intensity_slices = np.zeros((z_steps, N, N))
-
             for iz, z in enumerate(z_arr):
-                H = np.where(propagating_mask,
-                             np.exp(1j * kz * z), 0)
+                H  = np.where(propagating_mask, np.exp(1j * kz * z), 0)
                 Ez = np.fft.ifft2(A0 * H)
                 intensity_slices[iz] = np.abs(Ez)**2
 
+            # ================================================================
+            # 图1：原始6格图（完全保留）
+            # ================================================================
             fig = plt.figure(figsize=(20, 16))
 
             ax1 = fig.add_subplot(231)
             y_center_idx = N // 2
             xoz_slice = intensity_slices[:, y_center_idx, :]
-            xoz_slice /= xoz_slice.max() + 1e-9
+            xoz_slice = xoz_slice / (xoz_slice.max() + 1e-9)
             ax1.imshow(
                 xoz_slice,
                 extent=[xi[0]*1e3, xi[-1]*1e3, z_arr[0]*1e3, z_arr[-1]*1e3],
@@ -1225,7 +1221,7 @@ class SimulateNearfieldPropagation(BaseTool):
             ax2 = fig.add_subplot(232)
             x_center_idx = N // 2
             yoz_slice = intensity_slices[:, :, x_center_idx]
-            yoz_slice /= yoz_slice.max() + 1e-9
+            yoz_slice = yoz_slice / (yoz_slice.max() + 1e-9)
             ax2.imshow(
                 yoz_slice,
                 extent=[yi[0]*1e3, yi[-1]*1e3, z_arr[0]*1e3, z_arr[-1]*1e3],
@@ -1236,41 +1232,30 @@ class SimulateNearfieldPropagation(BaseTool):
             ax2.set_title("YOZ Slice (x=0)\n← Airy trajectory here")
             plt.colorbar(ax2.images[0], ax=ax2, label="Norm. Intensity")
 
-            z_indices = [
-                z_steps // 5,
-                z_steps // 2,
-                int(z_steps * 4 / 5)
-            ]
-            z_labels = ["z_near", "z_mid", "z_far"]
-
+            z_indices = [z_steps // 5, z_steps // 2, int(z_steps * 4 / 5)]
+            z_labels  = ["z_near", "z_mid", "z_far"]
             for plot_idx, (zi, zlabel) in enumerate(zip(z_indices, z_labels)):
                 ax = fig.add_subplot(233 + plot_idx)
-                xoy = intensity_slices[zi]
+                xoy      = intensity_slices[zi]
                 xoy_norm = xoy / (xoy.max() + 1e-9)
                 im = ax.imshow(
                     xoy_norm,
-                    extent=[xi[0]*1e3, xi[-1]*1e3,
-                            yi[0]*1e3, yi[-1]*1e3],
+                    extent=[xi[0]*1e3, xi[-1]*1e3, yi[0]*1e3, yi[-1]*1e3],
                     origin="lower", cmap="hot", vmin=0, vmax=1
                 )
                 ax.set_xlabel("x (mm)")
                 ax.set_ylabel("y (mm)")
-                ax.set_title(
-                    f"XOY @ z={z_arr[zi]*1e3:.0f}mm ({zlabel})\n"
-                    f"← Bessel rings here"
-                )
+                ax.set_title(f"XOY @ z={z_arr[zi]*1e3:.0f}mm ({zlabel})\n← Bessel rings here")
                 plt.colorbar(im, ax=ax, label="Norm. Intensity")
 
             ax6 = fig.add_subplot(236)
             cx_arr = np.zeros(z_steps)
             cy_arr = np.zeros(z_steps)
-
             for iz in range(z_steps):
-                sl = intensity_slices[iz]
+                sl    = intensity_slices[iz]
                 total = sl.sum() + 1e-9
                 cx_arr[iz] = (sl * XI).sum() / total * 1e3
                 cy_arr[iz] = (sl * YI).sum() / total * 1e3
-
             ax6.plot(z_arr * 1e3, cx_arr, label="x centroid", color="red")
             ax6.plot(z_arr * 1e3, cy_arr, label="y centroid", color="blue")
             ax6.axhline(0, color="gray", linestyle="--", linewidth=0.8)
@@ -1281,16 +1266,64 @@ class SimulateNearfieldPropagation(BaseTool):
             ax6.grid(True, alpha=0.3)
 
             plt.suptitle(
-                f"{test_title}  |  Near-field Propagation  |  z: 0 ~ {z_max*1e3:.0f}mm  |  "
-                f"λ={lam*1e3:.1f}mm",
+                f"{test_title}  |  Near-field Propagation  |  z: 0 ~ {z_max*1e3:.0f}mm  |  λ={lam*1e3:.1f}mm",
                 fontsize=13
             )
             plt.tight_layout()
-
             img_path = file_path.replace(".csv", "_nearfield.png")
             plt.savefig(img_path, dpi=150, bbox_inches="tight")
             plt.close()
 
+            # ================================================================
+            # 图2：多XOY截面图（新增）
+            # ================================================================
+            n_xoy_slices = min(n_xoy_slices, z_steps)   # 不超过总步数
+            n_cols       = 4
+            n_rows       = int(np.ceil(n_xoy_slices / n_cols))
+
+            # 均匀采样 z 索引
+            xoy_indices = np.linspace(0, z_steps - 1, n_xoy_slices, dtype=int)
+
+            fig2, axes2 = plt.subplots(
+                n_rows, n_cols,
+                figsize=(n_cols * 5, n_rows * 4.5)
+            )
+            axes2 = axes2.flatten()
+
+            for plot_idx, zi in enumerate(xoy_indices):
+                ax  = axes2[plot_idx]
+                xoy = intensity_slices[zi]
+                xoy_norm = xoy / (xoy.max() + 1e-9)
+                im = ax.imshow(
+                    xoy_norm,
+                    extent=[xi[0]*1e3, xi[-1]*1e3, yi[0]*1e3, yi[-1]*1e3],
+                    origin="lower", cmap="hot", vmin=0, vmax=1
+                )
+                ax.set_xlabel("x (mm)", fontsize=9)
+                ax.set_ylabel("y (mm)", fontsize=9)
+                ax.set_title(f"z = {z_arr[zi]*1e3:.0f} mm", fontsize=10)
+                ax.axhline(0, color='cyan', linewidth=0.5, alpha=0.6)
+                ax.axvline(0, color='cyan', linewidth=0.5, alpha=0.6)
+                plt.colorbar(im, ax=ax, label="Norm. I", fraction=0.046, pad=0.04)
+
+            # 隐藏多余子图
+            for ax in axes2[n_xoy_slices:]:
+                ax.set_visible(False)
+
+            fig2.suptitle(
+                f"{test_title}  |  XOY Slices ({n_xoy_slices} planes)  |  "
+                f"z: {z_arr[xoy_indices[0]]*1e3:.0f}~{z_arr[xoy_indices[-1]]*1e3:.0f} mm  |  "
+                f"λ={lam*1e3:.1f}mm",
+                fontsize=13
+            )
+            plt.tight_layout()
+            img_path2 = file_path.replace(".csv", "_nearfield_xoy_slices.png")
+            plt.savefig(img_path2, dpi=150, bbox_inches="tight")
+            plt.close()
+
+            # ================================================================
+            # 峰值位置
+            # ================================================================
             peak_z_idx = np.array(
                 [intensity_slices[iz].max() for iz in range(z_steps)]
             ).argmax()
@@ -1299,7 +1332,8 @@ class SimulateNearfieldPropagation(BaseTool):
                 f"Near-field propagation done.\n"
                 f" - Grid: {N}x{N}, z: 0~{z_max*1e3:.0f}mm ({z_steps} slices)\n"
                 f" - Peak intensity @ z={z_arr[peak_z_idx]*1e3:.1f}mm\n"
-                f" - Output: {img_path}"
+                f" - 主图 (6格):     {img_path}\n"
+                f" - XOY截面图 ({n_xoy_slices}张): {img_path2}"
             )
 
         except Exception as e:

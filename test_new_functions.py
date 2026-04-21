@@ -19,7 +19,7 @@ from agent_tools import (
     DEFAULT_LAYOUT_PATH,
     OUTPUT_DIR,
 )
-
+import glob
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 BACKUP_ROOT = os.path.join(PROJECT_ROOT, "outputs_backup")
 _current_backup_dir = None
@@ -78,18 +78,26 @@ def backup_results(test_name):
         return
 
     base = DEFAULT_LAYOUT_PATH.replace(".csv", "")
-    for sfx in [".csv", "_layout.png", "_farfield.png", "_incident_vs_comp.png", "_nearfield.png"]:
-        src = base + sfx if sfx != ".csv" else DEFAULT_LAYOUT_PATH
-        dst = os.path.join(_current_backup_dir, f"result_{test_name}{sfx}")
-        if os.path.exists(src):
-            shutil.copy(src, dst)
-            print(f"   Saved: result_{test_name}{sfx}")
 
+    # ① 精确匹配 CSV
+    if os.path.exists(DEFAULT_LAYOUT_PATH):
+        dst = os.path.join(_current_backup_dir, f"result_{test_name}.csv")
+        shutil.copy(DEFAULT_LAYOUT_PATH, dst)
+        print(f"   Saved: result_{test_name}.csv")
+
+    # ② 通配符匹配所有 current_layout 生成的图片
+    for src in glob.glob(base + "*.png"):
+        # 取后缀部分，如 _nearfield.png / _nearfield_xoy_slices.png
+        suffix = src[len(base):]          # e.g. "_nearfield_xoy_slices.png"
+        dst = os.path.join(_current_backup_dir, f"result_{test_name}{suffix}")
+        shutil.copy(src, dst)
+        print(f"   Saved: result_{test_name}{suffix}")
+
+    # ③ 清理 outputs/
     for f in os.listdir(OUTPUT_DIR):
         if f.startswith("current_layout"):
             os.remove(os.path.join(OUTPUT_DIR, f))
     print(f"[CLEANUP] outputs/ cleared")
-
 
 def init_grid(radius=0.13):
     """初始化六边形阵列"""
@@ -189,7 +197,7 @@ def test_bessel_only(eta=0.85, cone_angle_deg=60):   # ← 默认改60
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
-    init_grid(radius=0.08)
+    init_grid(radius=0.13)
 
     print(">>> Step 2: Configure CP (LCP)")
     configure_cp(eta=eta, pol="LCP")
@@ -208,9 +216,10 @@ def test_bessel_only(eta=0.85, cone_angle_deg=60):   # ← 默认改60
     # ✅ z_max改为200mm，聚焦在有效区域
     print(">>> Step 5: Near-field propagation (Bessel verification)")
     res_nf = SimulateNearfieldPropagation().call(json.dumps({
-        "z_max": 0.20,          # 200mm，覆盖非衍射区+衰减区
-        "z_steps": 80,          # 每2.5mm一截面
+        "z_max": 0.20,
+        "z_steps": 100,          # 步进2mm，截面充足
         "grid_size": 256,
+        "n_xoy_slices": 16,      # 4×4 网格，16张截面
         "test_title": f"Bessel (cone={cone_angle_deg}°)"
     }))
     print(f"   {res_nf}")
@@ -309,8 +318,8 @@ if __name__ == "__main__":
 
     test_bessel_only(eta=0.85, cone_angle_deg=60)   # 建议同时测大角度
 
-    # ✅ Airy波束 - 合理coeff
-    test_airy_only(coeff=8.6e4)
+    # # ✅ Airy波束 - 合理coeff
+    # test_airy_only(coeff=8.6e4)
 
     print("\n" + "=" * 60)
     print("  All tests complete. Check outputs_backup/ directory.")
