@@ -8,6 +8,7 @@ from matplotlib.patches import RegularPolygon
 from matplotlib.collections import PatchCollection
 import traceback
 import json
+from datetime import datetime
 # 尝试导入qwen_agent，如果不可用则提供桩
 try:
     from qwen_agent.tools.base import BaseTool, register_tool
@@ -27,10 +28,29 @@ except ImportError:
 
 # ================= 全局配置 =================
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+RESULTS_ROOT = os.path.join(PROJECT_ROOT, "results")
+os.makedirs(RESULTS_ROOT, exist_ok=True)
 
-DEFAULT_LAYOUT_PATH = os.path.join(OUTPUT_DIR, "current_layout.csv")
+_run_dir = None
+_run_prefix = None
+
+
+def init_run_dir(test_name: str) -> str:
+    """创建本次运行的结果目录，所有输出直接写入这里"""
+    global _run_dir, _run_prefix
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _run_prefix = f"{timestamp}_{test_name}"
+    _run_dir = os.path.join(RESULTS_ROOT, _run_prefix)
+    os.makedirs(_run_dir, exist_ok=True)
+    print(f"[RUN DIR] {_run_dir}")
+    return _run_dir
+
+
+def get_layout_path() -> str:
+    """返回当前运行的 layout CSV 路径"""
+    if _run_dir is None or _run_prefix is None:
+        raise RuntimeError("请先调用 init_run_dir()")
+    return os.path.join(_run_dir, f"{_run_prefix}.csv")
 
 CONSTANTS = {
     "freq": 9e9,
@@ -122,7 +142,7 @@ class GenerateGridLayout(BaseTool):
         {
             "name": "output_path",
             "type": "string",
-            "description": f"Optional save path. Default: {DEFAULT_LAYOUT_PATH}",
+            "description": "Optional save path. Default: current run dir/layout.csv",
             "required": False,
         },
     ]
@@ -134,7 +154,7 @@ class GenerateGridLayout(BaseTool):
             p = json.loads(params)
             layout_type = p.get("layout_type", "hex")
             radius = float(p.get("radius", 0.13))
-            save_path = p.get("output_path") or DEFAULT_LAYOUT_PATH
+            save_path = p.get("output_path") or get_layout_path()
             period = CONSTANTS["p"]
             xyset = set()
 
@@ -189,7 +209,7 @@ class ApplyVortexPhase(BaseTool):
 
             p = json.loads(params)
             l = int(p.get("charge_l", 1))
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
             if not os.path.exists(file_path):
                 return f"Error: File {file_path} not found."
             df = pd.read_csv(file_path)
@@ -237,7 +257,7 @@ class ApplyDammannGrating(BaseTool):
             import json
 
             p_dict = json.loads(params)
-            file_path = p_dict.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p_dict.get("file_path") or get_layout_path()
             N = int(p_dict.get("beam_order", 5))
             M = int(p_dict.get("period_multiple", 12))
             unit_p = CONSTANTS["p"]
@@ -328,7 +348,7 @@ class ApplyCollimateLens(BaseTool):
             p = json.loads(params)
             f = float(p.get("focal_length", 0.15))
             mode = p.get("mode", "overwrite")
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
             df = pd.read_csv(file_path)
@@ -389,7 +409,7 @@ class ApplyAxiconPhase(BaseTool):
             alpha_deg = float(p.get("cone_angle_deg", 10.0))
             xy_unit   = p.get("xy_unit", "m")
             mode      = p.get("mode", "overwrite")
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
 
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
@@ -518,7 +538,7 @@ class ApplyAiryPhase(BaseTool):
             xy_unit  = p.get("xy_unit", "m")
             separable = p.get("separable", True)
             mode     = p.get("mode", "overwrite")
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
 
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
@@ -634,7 +654,7 @@ class ApplyBeamSteering(BaseTool):
             theta_d = float(p.get("steer_theta_deg", 30.0))
             phi_d = float(p.get("steer_phi_deg", 0.0))
             mode = p.get("mode", "overwrite")
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
             df = pd.read_csv(file_path)
@@ -695,7 +715,7 @@ class ConfigureCPEfficiency(BaseTool):
             p = json.loads(params)
             eta = float(p.get("eta", 0.85))
             pol = p.get("incident_pol", "LCP").upper()
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
             df = pd.read_csv(file_path)
@@ -761,7 +781,7 @@ class ApplyMeasuredCompensation(BaseTool):
             phase_csv = p["phase_csv"]
             mag_csv = p.get("magnitude_csv")
             extra_csv = p.get("additional_phase_csv")
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
 
             if not os.path.exists(file_path):
                 return f"Error: Layout file not found: {file_path}"
@@ -845,7 +865,7 @@ class CalculatePBRotation(BaseTool):
             import json
 
             p = json.loads(params)
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
             df = pd.read_csv(file_path)
@@ -895,7 +915,7 @@ class SimulateMetasurface(BaseTool):
             import json
 
             p = json.loads(params)
-            file_path = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path = p.get("file_path") or get_layout_path()
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
 
@@ -1151,7 +1171,7 @@ class SimulateNearfieldPropagation(BaseTool):
             z_steps      = int(p.get("z_steps", 50))
             N            = int(p.get("grid_size", 256))
             test_title   = p.get("test_title", "")
-            file_path    = p.get("file_path") or DEFAULT_LAYOUT_PATH
+            file_path    = p.get("file_path") or get_layout_path()
             n_xoy_slices = int(p.get("n_xoy_slices", 16))   # ← 新增
 
             if not os.path.exists(file_path):

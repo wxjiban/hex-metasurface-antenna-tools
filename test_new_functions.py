@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 from datetime import datetime
 from agent_tools import (
     CONSTANTS,
@@ -16,13 +15,12 @@ from agent_tools import (
     CalculatePBRotation,
     SimulateMetasurface,
     SimulateNearfieldPropagation,
-    DEFAULT_LAYOUT_PATH,
-    OUTPUT_DIR,
+    init_run_dir,
+    get_layout_path,
+    RESULTS_ROOT,
 )
-import glob
+
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
-BACKUP_ROOT = os.path.join(PROJECT_ROOT, "outputs_backup")
-_current_backup_dir = None
 
 # ============================================================
 # 配置: 实测数据文件路径 (根据实际位置修改)
@@ -36,68 +34,6 @@ RCP_MAG_CSV = os.path.join(DATA_DIR, "Right_circular_Magnitude_mm.csv")
 
 FEED_DISTANCE = 0.240
 
-
-def backup_outputs_auto():
-    """备份当前outputs目录和输入csv文件到带时间戳的文件夹"""
-    global _current_backup_dir
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _current_backup_dir = os.path.join(BACKUP_ROOT, f"backup_{timestamp}")
-    os.makedirs(_current_backup_dir, exist_ok=True)
-
-    for csv_file in [LCP_PHASE_CSV, LCP_MAG_CSV, RCP_PHASE_CSV, RCP_MAG_CSV]:
-        if os.path.exists(csv_file):
-            shutil.copy(
-                csv_file, os.path.join(_current_backup_dir, os.path.basename(csv_file))
-            )
-
-    print(f"[AUTO BACKUP] Input CSVs saved to outputs_backup/backup_{timestamp}/")
-
-
-def restore_latest_backup():
-    """恢复最近一次备份到outputs目录"""
-    if not os.path.exists(BACKUP_ROOT):
-        return False
-    backups = sorted([d for d in os.listdir(BACKUP_ROOT) if d.startswith("backup_")])
-    if not backups:
-        return False
-    latest = backups[-1]
-    backup_dir = os.path.join(BACKUP_ROOT, latest)
-    for f in os.listdir(backup_dir):
-        src = os.path.join(backup_dir, f)
-        dst = os.path.join(OUTPUT_DIR, f)
-        shutil.copy(src, dst)
-    print(f"[RESTORE] Restored from {latest}")
-    return True
-
-
-def backup_results(test_name):
-    """把仿真结果保存到时间戳备份目录，清理outputs/"""
-    global _current_backup_dir
-    if _current_backup_dir is None:
-        print("[WARNING] No backup directory, skipping save")
-        return
-
-    base = DEFAULT_LAYOUT_PATH.replace(".csv", "")
-
-    # ① 精确匹配 CSV
-    if os.path.exists(DEFAULT_LAYOUT_PATH):
-        dst = os.path.join(_current_backup_dir, f"result_{test_name}.csv")
-        shutil.copy(DEFAULT_LAYOUT_PATH, dst)
-        print(f"   Saved: result_{test_name}.csv")
-
-    # ② 通配符匹配所有 current_layout 生成的图片
-    for src in glob.glob(base + "*.png"):
-        # 取后缀部分，如 _nearfield.png / _nearfield_xoy_slices.png
-        suffix = src[len(base):]          # e.g. "_nearfield_xoy_slices.png"
-        dst = os.path.join(_current_backup_dir, f"result_{test_name}{suffix}")
-        shutil.copy(src, dst)
-        print(f"   Saved: result_{test_name}{suffix}")
-
-    # ③ 清理 outputs/
-    for f in os.listdir(OUTPUT_DIR):
-        if f.startswith("current_layout"):
-            os.remove(os.path.join(OUTPUT_DIR, f))
-    print(f"[CLEANUP] outputs/ cleared")
 
 def init_grid(radius=0.13):
     """初始化六边形阵列"""
@@ -114,51 +50,50 @@ def configure_cp(eta=0.85, pol="LCP"):
 
 
 def pb_and_sim(test_name):
-    """PB转角计算 + 仿真 + 备份"""
+    """PB转角计算 + 仿真"""
     res_pb = CalculatePBRotation().call(json.dumps({}))
     print(f"   {res_pb}")
     res_sim = SimulateMetasurface().call(json.dumps({}))
     print(f"   {res_sim}")
-    backup_results(test_name)
 
 
 # ============================================================
 # 测试 A: LCP 入射 → 平面波出射 (实测数据补偿)
 # ============================================================
 def test_lcp_collimate(eta=0.85):
-    name = "LCP_collimate"
+    test_name = "LCP_collimate"
+    init_run_dir(test_name)
+
     print(f"\n{'=' * 60}")
-    print(f"  Test A: {name} (LCP feed → plane wave)")
+    print(f"  Test A: {test_name} (LCP feed → plane wave)")
     print(f"{'=' * 60}")
 
-    # 1. 初始化阵列
     print(">>> Step 1: Init grid")
     init_grid()
 
-    # 2. 配置 LCP 入射
     print(">>> Step 2: Configure CP (LCP)")
     configure_cp(eta=eta, pol="LCP")
 
-    # 3. 加载实测数据并计算补偿相位
     print(">>> Step 3: Load measured LCP data & compute compensation")
     res = ApplyMeasuredCompensation().call(
         json.dumps({"phase_csv": LCP_PHASE_CSV, "magnitude_csv": LCP_MAG_CSV})
     )
     print(f"   {res}")
 
-    # 4. PB转角 + 仿真
     print(">>> Step 4: PB rotation & Simulation")
-    pb_and_sim(name)
-    print(f"\n>>> Test A [{name}] COMPLETE.\n")
+    pb_and_sim(test_name)
+    print(f"\n>>> Test A [{test_name}] COMPLETE.\n")
 
 
 # ============================================================
 # 测试 H: 仅生成 Airy 波束（理论公式，无实测补偿）
 # ============================================================
 def test_airy_only(eta=0.85, coeff=5e6):
-    name = "Airy_only"
+    test_name = "Airy_only"
+    init_run_dir(test_name)
+
     print(f"\n{'=' * 60}")
-    print(f"  Test H: {name} (theoretical Airy beam)")
+    print(f"  Test H: {test_name} (theoretical Airy beam)")
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
@@ -183,17 +118,19 @@ def test_airy_only(eta=0.85, coeff=5e6):
     print(f"   {res_nf}")
 
     print(">>> Step 4: PB rotation & Simulation")
-    pb_and_sim(name)
-    print(f"\n>>> Test H [{name}] COMPLETE.\n")
+    pb_and_sim(test_name)
+    print(f"\n>>> Test H [{test_name}] COMPLETE.\n")
 
 
 # ============================================================
 # 测试 I: 仅生成 Bessel 波束（理论公式，无实测补偿）
 # ============================================================
-def test_bessel_only(eta=0.85, cone_angle_deg=60):   # ← 默认改60
-    name = f"Bessel_only_{cone_angle_deg}deg"
+def test_bessel_only(eta=0.85, cone_angle_deg=60):
+    test_name = f"Bessel_{cone_angle_deg}deg"
+    init_run_dir(test_name)
+
     print(f"\n{'=' * 60}")
-    print(f"  Test I: {name} (theoretical Bessel beam)")
+    print(f"  Test I: {test_name} (theoretical Bessel beam)")
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
@@ -208,34 +145,34 @@ def test_bessel_only(eta=0.85, cone_angle_deg=60):   # ← 默认改60
     )
     print(f"   {res}")
 
-    # ✅ 先算PB旋转角，再做近场仿真，顺序正确
     print(">>> Step 4: PB rotation")
     res_pb = CalculatePBRotation().call(json.dumps({}))
     print(f"   {res_pb}")
 
-    # ✅ z_max改为200mm，聚焦在有效区域
     print(">>> Step 5: Near-field propagation (Bessel verification)")
     res_nf = SimulateNearfieldPropagation().call(json.dumps({
         "z_max": 0.20,
-        "z_steps": 100,          # 步进2mm，截面充足
+        "z_steps": 100,
         "grid_size": 256,
-        "n_xoy_slices": 16,      # 4×4 网格，16张截面
+        "n_xoy_slices": 16,
         "test_title": f"Bessel (cone={cone_angle_deg}°)"
     }))
     print(f"   {res_nf}")
 
     print(">>> Step 6: Far-field simulation")
-    pb_and_sim(name)
-    print(f"\n>>> Test I [{name}] COMPLETE.\n")
+    pb_and_sim(test_name)
+    print(f"\n>>> Test I [{test_name}] COMPLETE.\n")
 
 
 # ============================================================
 # 测试 F: LCP 入射 → 补偿 + 达曼光栅 (多波束)
 # ============================================================
 def test_lcp_collimate_dammann(eta=0.85, beam_order=3):
-    name = f"LCP_collimate_dammann_{beam_order}x{beam_order}"
+    test_name = f"LCP_collimate_dammann_{beam_order}x{beam_order}"
+    init_run_dir(test_name)
+
     print(f"\n{'=' * 60}")
-    print(f"  Test F: {name}")
+    print(f"  Test F: {test_name}")
     print(f"{'=' * 60}")
 
     print(">>> Step 1: Init grid")
@@ -257,8 +194,8 @@ def test_lcp_collimate_dammann(eta=0.85, beam_order=3):
     print(f"   {res}")
 
     print(">>> Step 5: PB rotation & Simulation")
-    pb_and_sim(name)
-    print(f"\n>>> Test F [{name}] COMPLETE.\n")
+    pb_and_sim(test_name)
+    print(f"\n>>> Test F [{test_name}] COMPLETE.\n")
 
 
 # ============================================================
@@ -269,6 +206,8 @@ def test_compare_theoretical_vs_measured(eta=0.85):
 
     # G1: 理论准直
     name_theo = "LCP_theoretical_collimate"
+    init_run_dir(name_theo)
+
     print(f"\n{'=' * 60}")
     print(f"  Test G1: {name_theo} (theoretical formula)")
     print(f"{'=' * 60}")
@@ -276,16 +215,15 @@ def test_compare_theoretical_vs_measured(eta=0.85):
     init_grid()
     configure_cp(eta=eta, pol="LCP")
 
-    # 使用理论公式
     res = ApplyCollimateLens().call(
         json.dumps({"focal_length": FEED_DISTANCE, "mode": "overwrite"})
     )
     print(f"   {res}")
 
-    # 加载实测幅度 (仅幅度, 不用实测相位)
     import pandas as pd_local
 
-    df = pd_local.read_csv(DEFAULT_LAYOUT_PATH)
+    layout_path = get_layout_path()
+    df = pd_local.read_csv(layout_path)
     if os.path.exists(LCP_MAG_CSV):
         from agent_tools import parse_measured_csv, interpolate_to_hex_grid
 
@@ -293,9 +231,10 @@ def test_compare_theoretical_vs_measured(eta=0.85):
         measured_mag = interpolate_to_hex_grid(
             xm, ym, mag_2d, df["x"].values, df["y"].values
         )
+        import numpy as np
         df["measured_mag"] = np.clip(measured_mag, 0, None)
         df["mag"] = df["measured_mag"]
-        df.to_csv(DEFAULT_LAYOUT_PATH, index=False)
+        df.to_csv(layout_path, index=False)
 
     pb_and_sim(name_theo)
 
@@ -314,14 +253,11 @@ if __name__ == "__main__":
     print(f"  Unit cell: {CONSTANTS['p'] * 1000:.1f} mm")
     print("=" * 60)
 
-    backup_outputs_auto()
+    test_bessel_only(eta=0.85, cone_angle_deg=60)
 
-    test_bessel_only(eta=0.85, cone_angle_deg=60)   # 建议同时测大角度
-
-    # # ✅ Airy波束 - 合理coeff
+    # # Airy波束 - 合理coeff
     # test_airy_only(coeff=8.6e4)
 
     print("\n" + "=" * 60)
-    print("  All tests complete. Check outputs_backup/ directory.")
+    print(f"  All tests complete. Check {RESULTS_ROOT}/ directory.")
     print("=" * 60)
-
