@@ -1219,6 +1219,16 @@ class SimulateNearfieldPropagation(BaseTool):
                 Ez = np.fft.ifft2(A0 * H)
                 intensity_slices[iz] = np.abs(Ez)**2
 
+            # ---- CSV 数据保存辅助函数 ----
+            csv_prefix = file_path.replace(".csv", "")
+            csv_paths = []
+
+            def _save_df(df_data, suffix):
+                csv_path = f"{csv_prefix}_data_{suffix}.csv"
+                df_data.to_csv(csv_path, index=True)
+                csv_paths.append(csv_path)
+                return csv_path
+
             # ================================================================
             # 图1：原始6格图（完全保留）
             # ================================================================
@@ -1226,8 +1236,13 @@ class SimulateNearfieldPropagation(BaseTool):
 
             ax1 = fig.add_subplot(231)
             y_center_idx = N // 2
-            xoz_slice = intensity_slices[:, y_center_idx, :]
-            xoz_slice = xoz_slice / (xoz_slice.max() + 1e-9)
+            xoz_raw = intensity_slices[:, y_center_idx, :]
+            # 保存原始 XOZ 数据：行=z(mm)，列=x(mm)
+            _save_df(
+                pd.DataFrame(xoz_raw, index=z_arr * 1e3, columns=xi * 1e3),
+                "xoz_y0"
+            )
+            xoz_slice = xoz_raw / (xoz_raw.max() + 1e-9)
             ax1.imshow(
                 xoz_slice,
                 extent=[xi[0]*1e3, xi[-1]*1e3, z_arr[0]*1e3, z_arr[-1]*1e3],
@@ -1240,8 +1255,13 @@ class SimulateNearfieldPropagation(BaseTool):
 
             ax2 = fig.add_subplot(232)
             x_center_idx = N // 2
-            yoz_slice = intensity_slices[:, :, x_center_idx]
-            yoz_slice = yoz_slice / (yoz_slice.max() + 1e-9)
+            yoz_raw = intensity_slices[:, :, x_center_idx]
+            # 保存原始 YOZ 数据：行=z(mm)，列=y(mm)
+            _save_df(
+                pd.DataFrame(yoz_raw, index=z_arr * 1e3, columns=yi * 1e3),
+                "yoz_x0"
+            )
+            yoz_slice = yoz_raw / (yoz_raw.max() + 1e-9)
             ax2.imshow(
                 yoz_slice,
                 extent=[yi[0]*1e3, yi[-1]*1e3, z_arr[0]*1e3, z_arr[-1]*1e3],
@@ -1257,6 +1277,12 @@ class SimulateNearfieldPropagation(BaseTool):
             for plot_idx, (zi, zlabel) in enumerate(zip(z_indices, z_labels)):
                 ax = fig.add_subplot(233 + plot_idx)
                 xoy      = intensity_slices[zi]
+                # 保存原始 XOY 数据：行=y(mm)，列=x(mm)
+                z_mm = z_arr[zi] * 1e3
+                _save_df(
+                    pd.DataFrame(xoy, index=yi * 1e3, columns=xi * 1e3),
+                    f"xoy_{zlabel}_{z_mm:.1f}mm"
+                )
                 xoy_norm = xoy / (xoy.max() + 1e-9)
                 im = ax.imshow(
                     xoy_norm,
@@ -1276,6 +1302,11 @@ class SimulateNearfieldPropagation(BaseTool):
                 total = sl.sum() + 1e-9
                 cx_arr[iz] = (sl * XI).sum() / total * 1e3
                 cy_arr[iz] = (sl * YI).sum() / total * 1e3
+            # 保存 centroid 轨迹数据
+            _save_df(
+                pd.DataFrame({"z_mm": z_arr * 1e3, "cx_mm": cx_arr, "cy_mm": cy_arr}),
+                "centroid"
+            )
             ax6.plot(z_arr * 1e3, cx_arr, label="x centroid", color="red")
             ax6.plot(z_arr * 1e3, cy_arr, label="y centroid", color="blue")
             ax6.axhline(0, color="gray", linestyle="--", linewidth=0.8)
@@ -1313,6 +1344,12 @@ class SimulateNearfieldPropagation(BaseTool):
             for plot_idx, zi in enumerate(xoy_indices):
                 ax  = axes2[plot_idx]
                 xoy = intensity_slices[zi]
+                # 保存原始 XOY 切片数据：行=y(mm)，列=x(mm)
+                z_mm = z_arr[zi] * 1e3
+                _save_df(
+                    pd.DataFrame(xoy, index=yi * 1e3, columns=xi * 1e3),
+                    f"xoy_slice_z{plot_idx:03d}_{z_mm:.1f}mm"
+                )
                 xoy_norm = xoy / (xoy.max() + 1e-9)
                 im = ax.imshow(
                     xoy_norm,
@@ -1348,12 +1385,14 @@ class SimulateNearfieldPropagation(BaseTool):
                 [intensity_slices[iz].max() for iz in range(z_steps)]
             ).argmax()
 
+            csv_summary = "\n".join([f" - {p}" for p in csv_paths])
             return (
                 f"Near-field propagation done.\n"
                 f" - Grid: {N}x{N}, z: 0~{z_max*1e3:.0f}mm ({z_steps} slices)\n"
                 f" - Peak intensity @ z={z_arr[peak_z_idx]*1e3:.1f}mm\n"
                 f" - 主图 (6格):     {img_path}\n"
-                f" - XOY截面图 ({n_xoy_slices}张): {img_path2}"
+                f" - XOY截面图 ({n_xoy_slices}张): {img_path2}\n"
+                f" - CSV 数据文件 ({len(csv_paths)}个):\n{csv_summary}"
             )
 
         except Exception as e:

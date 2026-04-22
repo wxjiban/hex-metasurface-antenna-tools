@@ -154,7 +154,7 @@ def test_bessel_only(eta=0.85, cone_angle_deg=60):
         "z_max": 0.20,
         "z_steps": 100,
         "grid_size": 256,
-        "n_xoy_slices": 16,
+        "n_xoy_slices": 21,
         "test_title": f"Bessel (cone={cone_angle_deg}°)"
     }))
     print(f"   {res_nf}")
@@ -253,7 +253,7 @@ if __name__ == "__main__":
     print(f"  Unit cell: {CONSTANTS['p'] * 1000:.1f} mm")
     print("=" * 60)
 
-    test_bessel_only(eta=0.85, cone_angle_deg=60)
+    test_bessel_only(eta=0.85, cone_angle_deg=37)
 
     # # Airy波束 - 合理coeff
     # test_airy_only(coeff=8.6e4)
