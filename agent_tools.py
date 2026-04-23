@@ -1104,11 +1104,34 @@ class SimulateMetasurface(BaseTool):
             plt.savefig(img_farfield, dpi=150, bbox_inches="tight")
             plt.close()
 
+            # ---- 保存远场原始数据到 CSV ----
+            farfield_csv_prefix = file_path.replace(".csv", "")
+            farfield_csv_paths = []
+            theta_deg = np.degrees(theta_arr)
+            phi_deg = np.degrees(phi_arr)
+
+            def _save_farfield(data_arr, suffix):
+                csv_path = f"{farfield_csv_prefix}_data_farfield_{suffix}.csv"
+                pd.DataFrame(data_arr, index=theta_deg, columns=phi_deg).to_csv(csv_path, index=True)
+                farfield_csv_paths.append(csv_path)
+                return csv_path
+
+            E_cross_amp = np.abs(E_cross)
+            E_co_amp = np.abs(E_co)
+            E_total_amp = np.sqrt(E_cross_amp**2 + E_co_amp**2)
+
+            _save_farfield(E_cross_amp, "cross_amp")
+            _save_farfield(E_co_amp, "co_amp")
+            _save_farfield(E_total_amp, "total_amp")
+
             results = [
                 f"CP Simulation Done ({pol_label}, η={eta:.2f}).",
                 f" - Structure: {img_struct}",
                 f" - Far-field: {img_farfield}",
+                f" - Far-field CSV files:",
             ]
+            for p in farfield_csv_paths:
+                results.append(f"     {p}")
             if img_incident:
                 results.append(f" - Incident/Comp: {img_incident}")
 
@@ -1129,13 +1152,13 @@ class SimulateNearfieldPropagation(BaseTool):
         {
             "name": "z_max",
             "type": "number",
-            "description": "Max propagation distance in meters. Default 0.5.",
+            "description": "Max propagation distance in meters. Default 0.3.",
             "required": False,
         },
         {
             "name": "z_steps",
             "type": "integer",
-            "description": "Number of z slices. Default 50.",
+            "description": "Number of z slices for ASM propagation. Default 301 (1 mm/step).",
             "required": False,
         },
         {
@@ -1157,9 +1180,9 @@ class SimulateNearfieldPropagation(BaseTool):
             "required": False,
         },
         {
-            "name": "n_xoy_slices",        # ← 新增参数
+            "name": "n_xoy_slices",
             "type": "integer",
-            "description": "Number of XOY slices to plot in the extra slice figure. Default 16.",
+            "description": "Number of XOY slices to plot in the extra slice figure. Fixed to 9 fixed z planes. Default 9.",
             "required": False,
         },
     ]
@@ -1167,12 +1190,12 @@ class SimulateNearfieldPropagation(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         try:
             p = json.loads(params)
-            z_max        = float(p.get("z_max", 0.5))
-            z_steps      = int(p.get("z_steps", 50))
+            z_max        = float(p.get("z_max", 0.3))
+            z_steps      = int(p.get("z_steps", 301))
             N            = int(p.get("grid_size", 256))
             test_title   = p.get("test_title", "")
             file_path    = p.get("file_path") or get_layout_path()
-            n_xoy_slices = int(p.get("n_xoy_slices", 16))   # ← 新增
+            n_xoy_slices = int(p.get("n_xoy_slices", 9))
 
             if not os.path.exists(file_path):
                 return f"Error: File not found at {file_path}."
@@ -1212,7 +1235,7 @@ class SimulateNearfieldPropagation(BaseTool):
             propagating_mask = (kz2 >= 0)
             A0  = np.fft.fft2(E0)
 
-            z_arr = np.linspace(0.001, z_max, z_steps)
+            z_arr = np.linspace(0, z_max, z_steps)
             intensity_slices = np.zeros((z_steps, N, N))
             for iz, z in enumerate(z_arr):
                 H  = np.where(propagating_mask, np.exp(1j * kz * z), 0)
@@ -1272,13 +1295,13 @@ class SimulateNearfieldPropagation(BaseTool):
             ax2.set_title("YOZ Slice (x=0)\n← Airy trajectory here")
             plt.colorbar(ax2.images[0], ax=ax2, label="Norm. Intensity")
 
-            z_indices = [z_steps // 5, z_steps // 2, int(z_steps * 4 / 5)]
-            z_labels  = ["z_near", "z_mid", "z_far"]
-            for plot_idx, (zi, zlabel) in enumerate(zip(z_indices, z_labels)):
+            # 图1 的 3 个 XOY 切片固定在 z = 50, 100, 200 mm（直接索引，1 mm/步）
+            z_targets_1 = [50, 100, 200]
+            z_labels    = ["z_50mm", "z_100mm", "z_200mm"]
+            for plot_idx, (z_mm, zlabel) in enumerate(zip(z_targets_1, z_labels)):
                 ax = fig.add_subplot(233 + plot_idx)
-                xoy      = intensity_slices[zi]
+                xoy = intensity_slices[z_mm]  # 直接索引，z_steps=301 时 z_mm 即索引
                 # 保存原始 XOY 数据：行=y(mm)，列=x(mm)
-                z_mm = z_arr[zi] * 1e3
                 _save_df(
                     pd.DataFrame(xoy, index=yi * 1e3, columns=xi * 1e3),
                     f"xoy_{zlabel}_{z_mm:.1f}mm"
@@ -1291,7 +1314,7 @@ class SimulateNearfieldPropagation(BaseTool):
                 )
                 ax.set_xlabel("x (mm)")
                 ax.set_ylabel("y (mm)")
-                ax.set_title(f"XOY @ z={z_arr[zi]*1e3:.0f}mm ({zlabel})\n← Bessel rings here")
+                ax.set_title(f"XOY @ z={z_mm}mm ({zlabel})\n← Bessel rings here")
                 plt.colorbar(im, ax=ax, label="Norm. Intensity")
 
             ax6 = fig.add_subplot(236)
@@ -1326,14 +1349,12 @@ class SimulateNearfieldPropagation(BaseTool):
             plt.close()
 
             # ================================================================
-            # 图2：多XOY截面图（新增）
+            # 图2：多XOY截面图（固定 9 个 z 平面）
             # ================================================================
-            n_xoy_slices = min(n_xoy_slices, z_steps)   # 不超过总步数
-            n_cols       = 4
-            n_rows       = int(np.ceil(n_xoy_slices / n_cols))
-
-            # 均匀采样 z 索引
-            xoy_indices = np.linspace(0, z_steps - 1, n_xoy_slices, dtype=int)
+            z_targets_2 = [5, 10, 20, 50, 75, 100, 150, 200, 300]
+            n_xoy_slices = len(z_targets_2)
+            n_cols = 4
+            n_rows = int(np.ceil(n_xoy_slices / n_cols))
 
             fig2, axes2 = plt.subplots(
                 n_rows, n_cols,
@@ -1341,11 +1362,10 @@ class SimulateNearfieldPropagation(BaseTool):
             )
             axes2 = axes2.flatten()
 
-            for plot_idx, zi in enumerate(xoy_indices):
+            for plot_idx, z_mm in enumerate(z_targets_2):
                 ax  = axes2[plot_idx]
-                xoy = intensity_slices[zi]
+                xoy = intensity_slices[z_mm]  # 直接索引，z_steps=301 时 z_mm 即索引
                 # 保存原始 XOY 切片数据：行=y(mm)，列=x(mm)
-                z_mm = z_arr[zi] * 1e3
                 _save_df(
                     pd.DataFrame(xoy, index=yi * 1e3, columns=xi * 1e3),
                     f"xoy_slice_z{plot_idx:03d}_{z_mm:.1f}mm"
@@ -1358,7 +1378,7 @@ class SimulateNearfieldPropagation(BaseTool):
                 )
                 ax.set_xlabel("x (mm)", fontsize=9)
                 ax.set_ylabel("y (mm)", fontsize=9)
-                ax.set_title(f"z = {z_arr[zi]*1e3:.0f} mm", fontsize=10)
+                ax.set_title(f"z = {z_mm} mm", fontsize=10)
                 ax.axhline(0, color='cyan', linewidth=0.5, alpha=0.6)
                 ax.axvline(0, color='cyan', linewidth=0.5, alpha=0.6)
                 plt.colorbar(im, ax=ax, label="Norm. I", fraction=0.046, pad=0.04)
@@ -1369,7 +1389,7 @@ class SimulateNearfieldPropagation(BaseTool):
 
             fig2.suptitle(
                 f"{test_title}  |  XOY Slices ({n_xoy_slices} planes)  |  "
-                f"z: {z_arr[xoy_indices[0]]*1e3:.0f}~{z_arr[xoy_indices[-1]]*1e3:.0f} mm  |  "
+                f"z: {z_targets_2[0]}~{z_targets_2[-1]} mm  |  "
                 f"λ={lam*1e3:.1f}mm",
                 fontsize=13
             )

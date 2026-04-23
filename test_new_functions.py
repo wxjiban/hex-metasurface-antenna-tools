@@ -151,10 +151,9 @@ def test_bessel_only(eta=0.85, cone_angle_deg=60):
 
     print(">>> Step 5: Near-field propagation (Bessel verification)")
     res_nf = SimulateNearfieldPropagation().call(json.dumps({
-        "z_max": 0.20,
-        "z_steps": 100,
+        "z_max": 0.30,
+        "z_steps": 301,
         "grid_size": 256,
-        "n_xoy_slices": 21,
         "test_title": f"Bessel (cone={cone_angle_deg}°)"
     }))
     print(f"   {res_nf}")
